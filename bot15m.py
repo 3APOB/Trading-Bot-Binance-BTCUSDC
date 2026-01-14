@@ -539,33 +539,12 @@ async def order(signal):
         
         # === GESTION DES ACHATS ===
         if signal == "BUY":
-            # 1. OUVRIR nouvelle position si bénéfices disponibles
-            new_buy_possible, _ = await calculate_available_positions()
-            if new_buy_possible > 0:
-                cost = qtt_trade_btc * price * fee_trade_buy
-                
-                if wallet_usdc >= cost:
-                    wallet_usdc -= cost
-                    wallet_btc += qtt_trade_btc
-                    
-                    new_id = f"B{len([p for p in positions if 'B' in str(p['id'])])}"
-                    new_pos = {
-                        "id": new_id,
-                        "state": "WAIT_SELL",
-                        "qty": qtt_trade_btc,
-                        "buy_price": price,
-                        "sell_price": None,
-                        "cycles": 0
-                    }
-                    positions.append(new_pos)
-                    
-                    message = f"🆕 OUVERTURE position {new_id} @ {price:.2f} → cycle A-V"
-                    print(message)
-                    await send_telegram(message)
+            # Compter les actions effectuées pour limiter à UNE SEULE action par signal
+            action_effectuee = False
             
-            # 2. RACHETER positions en WAIT_BUY (cycle continu)
+            # 1. PRIORITÉ: RACHETER UNE SEULE position en WAIT_BUY (cycle continu)
             for pos in positions:
-                if pos["state"] == "WAIT_BUY":
+                if pos["state"] == "WAIT_BUY" and not action_effectuee:
                     cost = pos["qty"] * price * fee_trade_buy
                     
                     if wallet_usdc >= cost:
@@ -577,13 +556,42 @@ async def order(signal):
                         message = f"🔁 RACHAT position {pos['id']} @ {price:.2f} → WAIT_SELL (cycle #{pos['cycles']})"
                         print(message)
                         await send_telegram(message)
+                        action_effectuee = True
                         break
+            
+            # 2. SI AUCUN RACHAT: OUVRIR UNE SEULE nouvelle position si bénéfices disponibles
+            if not action_effectuee:
+                new_buy_possible, _ = await calculate_available_positions()
+                if new_buy_possible > 0:
+                    cost = qtt_trade_btc * price * fee_trade_buy
+                    
+                    if wallet_usdc >= cost:
+                        wallet_usdc -= cost
+                        wallet_btc += qtt_trade_btc
+                        
+                        new_id = f"B{len([p for p in positions if 'B' in str(p['id'])])}"
+                        new_pos = {
+                            "id": new_id,
+                            "state": "WAIT_SELL",
+                            "qty": qtt_trade_btc,
+                            "buy_price": price,
+                            "sell_price": None,
+                            "cycles": 0
+                        }
+                        positions.append(new_pos)
+                        
+                        message = f"🆕 OUVERTURE position {new_id} @ {price:.2f} → cycle A-V"
+                        print(message)
+                        await send_telegram(message)
+                        action_effectuee = True
         
         # === GESTION DES VENTES ===
         elif signal == "SELL":
-            # Vendre positions WAIT_SELL qui ont atteint le seuil
+            # Vendre UNE SEULE position WAIT_SELL qui a atteint le seuil
+            action_effectuee = False
+            
             for pos in positions:
-                if pos["state"] == "WAIT_SELL":
+                if pos["state"] == "WAIT_SELL" and not action_effectuee:
                     # Si stock initial (pas de buy_price), vendre directement
                     # Sinon vérifier le seuil
                     should_sell = (pos["buy_price"] is None or 
@@ -608,6 +616,7 @@ async def order(signal):
                         message += f" → WAIT_BUY (cycle #{pos['cycles']})"
                         print(message)
                         await send_telegram(message)
+                        action_effectuee = True
                         break
         
         # Vérifier nouvelles positions possibles
